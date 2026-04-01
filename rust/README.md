@@ -1,30 +1,6 @@
 # 🦞 Claw Code — Rust Implementation
 
-<p align="center">
-  <a href="https://github.com/instructkr/claw-code"><img src="https://img.shields.io/github/stars/instructkr/claw-code?style=for-the-badge" alt="GitHub stars" /></a>
-  <a href="https://github.com/sponsors/instructkr"><img src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github&style=for-the-badge" alt="Sponsor on GitHub" /></a>
-</p>
-
-<p align="center">
-  <strong>Claw Code</strong> — a clean-room Rust rewrite of the original agent harness.
-</p>
-
-<p align="center">
-  Built for 90K+ stars. 43 tools. JSONL sessions. Prompt caching. Wire-protocol telemetry matching.<br>
-  Blazing fast. Memory-safe. Zero-compromise architecture.
-</p>
-
-## Star History
-
-<p align="center">
-  <a href="https://star-history.com/#instructkr/claw-code&Date">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=instructkr/claw-code&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=instructkr/claw-code&type=Date" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=instructkr/claw-code&type=Date" width="600" />
-    </picture>
-  </a>
-</p>
+A high-performance Rust rewrite of the Claw Code CLI agent harness. Built for speed, safety, and native tool execution.
 
 ## Quick Start
 
@@ -63,11 +39,6 @@ claw login
 
 | Feature | Status |
 |---------|--------|
-| 43 tools with full parity | ✅ |
-| JSONL session persistence | ✅ |
-| Prompt cache tracking | ✅ |
-| Wire-protocol telemetry matching | ✅ |
-| 11MB release binary | ✅ |
 | Anthropic API + streaming | ✅ |
 | OAuth login/logout | ✅ |
 | Interactive REPL (rustyline) | ✅ |

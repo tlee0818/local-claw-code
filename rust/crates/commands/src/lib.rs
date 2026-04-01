@@ -1,3 +1,9 @@
+use std::collections::BTreeMap;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use plugins::{PluginError, PluginManager, PluginSummary};
 use runtime::{compact_session, CompactionConfig, Session};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +39,7 @@ impl CommandRegistry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlashCommandSpec {
     pub name: &'static str,
+    pub aliases: &'static [&'static str],
     pub summary: &'static str,
     pub argument_hint: Option<&'static str>,
     pub resume_supported: bool,
@@ -90,7 +97,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "config",
         summary: "Inspect Claude config files or merged sections",
-        argument_hint: Some("[env|hooks|model]"),
+        argument_hint: Some("[env|hooks|model|plugins]"),
         resume_supported: true,
     },
     SlashCommandSpec {
@@ -118,6 +125,48 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
     },
     SlashCommandSpec {
+        name: "bughunter",
+        summary: "Inspect the codebase for likely bugs",
+        argument_hint: Some("[scope]"),
+        resume_supported: false,
+    },
+    SlashCommandSpec {
+        name: "commit",
+        summary: "Generate a commit message and create a git commit",
+        argument_hint: None,
+        resume_supported: false,
+    },
+    SlashCommandSpec {
+        name: "pr",
+        summary: "Draft or create a pull request from the conversation",
+        argument_hint: Some("[context]"),
+        resume_supported: false,
+    },
+    SlashCommandSpec {
+        name: "issue",
+        summary: "Draft or create a GitHub issue from the conversation",
+        argument_hint: Some("[context]"),
+        resume_supported: false,
+    },
+    SlashCommandSpec {
+        name: "ultraplan",
+        summary: "Run a deep planning prompt with multi-step reasoning",
+        argument_hint: Some("[task]"),
+        resume_supported: false,
+    },
+    SlashCommandSpec {
+        name: "teleport",
+        summary: "Jump to a file or symbol by searching the workspace",
+        argument_hint: Some("<symbol-or-path>"),
+        resume_supported: false,
+    },
+    SlashCommandSpec {
+        name: "debug-tool-call",
+        summary: "Replay the last tool call with debug details",
+        argument_hint: None,
+        resume_supported: false,
+    },
+    SlashCommandSpec {
         name: "export",
         summary: "Export the current conversation to a file",
         argument_hint: Some("[file]"),
@@ -129,6 +178,14 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[list|switch <session-id>]"),
         resume_supported: false,
     },
+    SlashCommandSpec {
+        name: "plugins",
+        summary: "List or manage plugins",
+        argument_hint: Some(
+            "[list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]",
+        ),
+        resume_supported: false,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +193,23 @@ pub enum SlashCommand {
     Help,
     Status,
     Compact,
+    Bughunter {
+        scope: Option<String>,
+    },
+    Commit,
+    Pr {
+        context: Option<String>,
+    },
+    Issue {
+        context: Option<String>,
+    },
+    Ultraplan {
+        task: Option<String>,
+    },
+    Teleport {
+        target: Option<String>,
+    },
+    DebugToolCall,
     Model {
         model: Option<String>,
     },
@@ -163,6 +237,10 @@ pub enum SlashCommand {
         action: Option<String>,
         target: Option<String>,
     },
+    Plugins {
+        action: Option<String>,
+        target: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -180,6 +258,23 @@ impl SlashCommand {
             "help" => Self::Help,
             "status" => Self::Status,
             "compact" => Self::Compact,
+            "bughunter" => Self::Bughunter {
+                scope: remainder_after_command(trimmed, command),
+            },
+            "commit" => Self::Commit,
+            "pr" => Self::Pr {
+                context: remainder_after_command(trimmed, command),
+            },
+            "issue" => Self::Issue {
+                context: remainder_after_command(trimmed, command),
+            },
+            "ultraplan" => Self::Ultraplan {
+                task: remainder_after_command(trimmed, command),
+            },
+            "teleport" => Self::Teleport {
+                target: remainder_after_command(trimmed, command),
+            },
+            "debug-tool-call" => Self::DebugToolCall,
             "model" => Self::Model {
                 model: parts.next().map(ToOwned::to_owned),
             },
@@ -207,9 +302,25 @@ impl SlashCommand {
                 action: parts.next().map(ToOwned::to_owned),
                 target: parts.next().map(ToOwned::to_owned),
             },
+            "plugins" => Self::Plugins {
+                action: parts.next().map(ToOwned::to_owned),
+                target: {
+                    let remainder = parts.collect::<Vec<_>>().join(" ");
+                    (!remainder.is_empty()).then_some(remainder)
+                },
+            },
             other => Self::Unknown(other.to_string()),
         })
     }
+}
+
+fn remainder_after_command(input: &str, command: &str) -> Option<String> {
+    input
+        .trim()
+        .strip_prefix(&format!("/{command}"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 #[must_use]
@@ -252,6 +363,176 @@ pub struct SlashCommandResult {
     pub session: Session,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginsCommandResult {
+    pub message: String,
+    pub reload_runtime: bool,
+}
+
+#[allow(clippy::too_many_lines)]
+pub fn handle_plugins_slash_command(
+    action: Option<&str>,
+    target: Option<&str>,
+    manager: &mut PluginManager,
+) -> Result<PluginsCommandResult, PluginError> {
+    match action {
+        None | Some("list") => Ok(PluginsCommandResult {
+            message: render_plugins_report(&manager.list_installed_plugins()?),
+            reload_runtime: false,
+        }),
+        Some("install") => {
+            let Some(target) = target else {
+                return Ok(PluginsCommandResult {
+                    message: "Usage: /plugins install <path>".to_string(),
+                    reload_runtime: false,
+                });
+            };
+            let install = manager.install(target)?;
+            let plugin = manager
+                .list_installed_plugins()?
+                .into_iter()
+                .find(|plugin| plugin.metadata.id == install.plugin_id);
+            Ok(PluginsCommandResult {
+                message: render_plugin_install_report(&install.plugin_id, plugin.as_ref()),
+                reload_runtime: true,
+            })
+        }
+        Some("enable") => {
+            let Some(target) = target else {
+                return Ok(PluginsCommandResult {
+                    message: "Usage: /plugins enable <name>".to_string(),
+                    reload_runtime: false,
+                });
+            };
+            let plugin = resolve_plugin_target(manager, target)?;
+            manager.enable(&plugin.metadata.id)?;
+            Ok(PluginsCommandResult {
+                message: format!(
+                    "Plugins\n  Result           enabled {}\n  Name             {}\n  Version          {}\n  Status           enabled",
+                    plugin.metadata.id, plugin.metadata.name, plugin.metadata.version
+                ),
+                reload_runtime: true,
+            })
+        }
+        Some("disable") => {
+            let Some(target) = target else {
+                return Ok(PluginsCommandResult {
+                    message: "Usage: /plugins disable <name>".to_string(),
+                    reload_runtime: false,
+                });
+            };
+            let plugin = resolve_plugin_target(manager, target)?;
+            manager.disable(&plugin.metadata.id)?;
+            Ok(PluginsCommandResult {
+                message: format!(
+                    "Plugins\n  Result           disabled {}\n  Name             {}\n  Version          {}\n  Status           disabled",
+                    plugin.metadata.id, plugin.metadata.name, plugin.metadata.version
+                ),
+                reload_runtime: true,
+            })
+        }
+        Some("uninstall") => {
+            let Some(target) = target else {
+                return Ok(PluginsCommandResult {
+                    message: "Usage: /plugins uninstall <plugin-id>".to_string(),
+                    reload_runtime: false,
+                });
+            };
+            manager.uninstall(target)?;
+            Ok(PluginsCommandResult {
+                message: format!("Plugins\n  Result           uninstalled {target}"),
+                reload_runtime: true,
+            })
+        }
+        Some("update") => {
+            let Some(target) = target else {
+                return Ok(PluginsCommandResult {
+                    message: "Usage: /plugins update <plugin-id>".to_string(),
+                    reload_runtime: false,
+                });
+            };
+            let update = manager.update(target)?;
+            let plugin = manager
+                .list_installed_plugins()?
+                .into_iter()
+                .find(|plugin| plugin.metadata.id == update.plugin_id);
+            Ok(PluginsCommandResult {
+                message: format!(
+                    "Plugins\n  Result           updated {}\n  Name             {}\n  Old version      {}\n  New version      {}\n  Status           {}",
+                    update.plugin_id,
+                    plugin
+                        .as_ref()
+                        .map_or_else(|| update.plugin_id.clone(), |plugin| plugin.metadata.name.clone()),
+                    update.old_version,
+                    update.new_version,
+                    plugin
+                        .as_ref()
+                        .map_or("unknown", |plugin| if plugin.enabled { "enabled" } else { "disabled" }),
+                ),
+                reload_runtime: true,
+            })
+        }
+        Some(other) => Ok(PluginsCommandResult {
+            message: format!(
+                "Unknown /plugins action '{other}'. Use list, install, enable, disable, uninstall, or update."
+            ),
+            reload_runtime: false,
+        }),
+    }
+}
+
+#[must_use]
+pub fn render_plugins_report(plugins: &[PluginSummary]) -> String {
+    let mut lines = vec!["Plugins".to_string()];
+    if plugins.is_empty() {
+        lines.push("  No plugins installed.".to_string());
+        return lines.join("\n");
+    }
+    for plugin in plugins {
+        let enabled = if plugin.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        lines.push(format!(
+            "  {name:<20} v{version:<10} {enabled}",
+            name = plugin.metadata.name,
+            version = plugin.metadata.version,
+        ));
+    }
+    lines.join("\n")
+}
+
+fn render_plugin_install_report(plugin_id: &str, plugin: Option<&PluginSummary>) -> String {
+    let name = plugin.map_or(plugin_id, |plugin| plugin.metadata.name.as_str());
+    let version = plugin.map_or("unknown", |plugin| plugin.metadata.version.as_str());
+    let enabled = plugin.is_some_and(|plugin| plugin.enabled);
+    format!(
+        "Plugins\n  Result           installed {plugin_id}\n  Name             {name}\n  Version          {version}\n  Status           {}",
+        if enabled { "enabled" } else { "disabled" }
+    )
+}
+
+fn resolve_plugin_target(
+    manager: &PluginManager,
+    target: &str,
+) -> Result<PluginSummary, PluginError> {
+    let mut matches = manager
+        .list_installed_plugins()?
+        .into_iter()
+        .filter(|plugin| plugin.metadata.id == target || plugin.metadata.name == target)
+        .collect::<Vec<_>>();
+    match matches.len() {
+        1 => Ok(matches.remove(0)),
+        0 => Err(PluginError::NotFound(format!(
+            "plugin `{target}` is not installed or discoverable"
+        ))),
+        _ => Err(PluginError::InvalidManifest(format!(
+            "plugin name `{target}` is ambiguous; use the full plugin id"
+        ))),
+    }
+}
+
 #[must_use]
 pub fn handle_slash_command(
     input: &str,
@@ -279,6 +560,13 @@ pub fn handle_slash_command(
             session: session.clone(),
         }),
         SlashCommand::Status
+        | SlashCommand::Bughunter { .. }
+        | SlashCommand::Commit
+        | SlashCommand::Pr { .. }
+        | SlashCommand::Issue { .. }
+        | SlashCommand::Ultraplan { .. }
+        | SlashCommand::Teleport { .. }
+        | SlashCommand::DebugToolCall
         | SlashCommand::Model { .. }
         | SlashCommand::Permissions { .. }
         | SlashCommand::Clear { .. }
@@ -291,6 +579,7 @@ pub fn handle_slash_command(
         | SlashCommand::Version
         | SlashCommand::Export { .. }
         | SlashCommand::Session { .. }
+        | SlashCommand::Plugins { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -298,15 +587,88 @@ pub fn handle_slash_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        handle_slash_command, render_slash_command_help, resume_supported_slash_commands,
-        slash_command_specs, SlashCommand,
+        handle_plugins_slash_command, handle_slash_command, load_agents_from_roots,
+        load_skills_from_roots, render_agents_report, render_plugins_report, render_skills_report,
+        render_slash_command_help, resume_supported_slash_commands, slash_command_specs,
+        DefinitionSource, SlashCommand,
     };
+    use plugins::{PluginKind, PluginManager, PluginManagerConfig, PluginMetadata, PluginSummary};
     use runtime::{CompactionConfig, ContentBlock, ConversationMessage, MessageRole, Session};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("commands-plugin-{label}-{nanos}"))
+    }
+
+    fn write_external_plugin(root: &Path, name: &str, version: &str) {
+        fs::create_dir_all(root.join(".claude-plugin")).expect("manifest dir");
+        fs::write(
+            root.join(".claude-plugin").join("plugin.json"),
+            format!(
+                "{{\n  \"name\": \"{name}\",\n  \"version\": \"{version}\",\n  \"description\": \"commands plugin\"\n}}"
+            ),
+        )
+        .expect("write manifest");
+    }
+
+    fn write_bundled_plugin(root: &Path, name: &str, version: &str, default_enabled: bool) {
+        fs::create_dir_all(root.join(".claude-plugin")).expect("manifest dir");
+        fs::write(
+            root.join(".claude-plugin").join("plugin.json"),
+            format!(
+                "{{\n  \"name\": \"{name}\",\n  \"version\": \"{version}\",\n  \"description\": \"bundled commands plugin\",\n  \"defaultEnabled\": {}\n}}",
+                if default_enabled { "true" } else { "false" }
+            ),
+        )
+        .expect("write bundled manifest");
+    }
+
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn parses_supported_slash_commands() {
         assert_eq!(SlashCommand::parse("/help"), Some(SlashCommand::Help));
         assert_eq!(SlashCommand::parse(" /status "), Some(SlashCommand::Status));
+        assert_eq!(
+            SlashCommand::parse("/bughunter runtime"),
+            Some(SlashCommand::Bughunter {
+                scope: Some("runtime".to_string())
+            })
+        );
+        assert_eq!(SlashCommand::parse("/commit"), Some(SlashCommand::Commit));
+        assert_eq!(
+            SlashCommand::parse("/pr ready for review"),
+            Some(SlashCommand::Pr {
+                context: Some("ready for review".to_string())
+            })
+        );
+        assert_eq!(
+            SlashCommand::parse("/issue flaky test"),
+            Some(SlashCommand::Issue {
+                context: Some("flaky test".to_string())
+            })
+        );
+        assert_eq!(
+            SlashCommand::parse("/ultraplan ship both features"),
+            Some(SlashCommand::Ultraplan {
+                task: Some("ship both features".to_string())
+            })
+        );
+        assert_eq!(
+            SlashCommand::parse("/teleport conversation.rs"),
+            Some(SlashCommand::Teleport {
+                target: Some("conversation.rs".to_string())
+            })
+        );
+        assert_eq!(
+            SlashCommand::parse("/debug-tool-call"),
+            Some(SlashCommand::DebugToolCall)
+        );
         assert_eq!(
             SlashCommand::parse("/model claude-opus"),
             Some(SlashCommand::Model {
@@ -365,6 +727,34 @@ mod tests {
                 target: Some("abc123".to_string())
             })
         );
+        assert_eq!(
+            SlashCommand::parse("/plugins install demo"),
+            Some(SlashCommand::Plugins {
+                action: Some("install".to_string()),
+                target: Some("demo".to_string())
+            })
+        );
+        assert_eq!(
+            SlashCommand::parse("/plugins list"),
+            Some(SlashCommand::Plugins {
+                action: Some("list".to_string()),
+                target: None
+            })
+        );
+        assert_eq!(
+            SlashCommand::parse("/plugins enable demo"),
+            Some(SlashCommand::Plugins {
+                action: Some("enable".to_string()),
+                target: Some("demo".to_string())
+            })
+        );
+        assert_eq!(
+            SlashCommand::parse("/plugins disable demo"),
+            Some(SlashCommand::Plugins {
+                action: Some("disable".to_string()),
+                target: Some("demo".to_string())
+            })
+        );
     }
 
     #[test]
@@ -374,19 +764,29 @@ mod tests {
         assert!(help.contains("/help"));
         assert!(help.contains("/status"));
         assert!(help.contains("/compact"));
+        assert!(help.contains("/bughunter [scope]"));
+        assert!(help.contains("/commit"));
+        assert!(help.contains("/pr [context]"));
+        assert!(help.contains("/issue [context]"));
+        assert!(help.contains("/ultraplan [task]"));
+        assert!(help.contains("/teleport <symbol-or-path>"));
+        assert!(help.contains("/debug-tool-call"));
         assert!(help.contains("/model [model]"));
         assert!(help.contains("/permissions [read-only|workspace-write|danger-full-access]"));
         assert!(help.contains("/clear [--confirm]"));
         assert!(help.contains("/cost"));
         assert!(help.contains("/resume <session-path>"));
-        assert!(help.contains("/config [env|hooks|model]"));
+        assert!(help.contains("/config [env|hooks|model|plugins]"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));
         assert!(help.contains("/diff"));
         assert!(help.contains("/version"));
         assert!(help.contains("/export [file]"));
         assert!(help.contains("/session [list|switch <session-id>]"));
-        assert_eq!(slash_command_specs().len(), 15);
+        assert!(help.contains(
+            "/plugins [list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]"
+        ));
+        assert_eq!(slash_command_specs().len(), 23);
         assert_eq!(resume_supported_slash_commands().len(), 11);
     }
 
@@ -435,6 +835,22 @@ mod tests {
         assert!(handle_slash_command("/unknown", &session, CompactionConfig::default()).is_none());
         assert!(handle_slash_command("/status", &session, CompactionConfig::default()).is_none());
         assert!(
+            handle_slash_command("/bughunter", &session, CompactionConfig::default()).is_none()
+        );
+        assert!(handle_slash_command("/commit", &session, CompactionConfig::default()).is_none());
+        assert!(handle_slash_command("/pr", &session, CompactionConfig::default()).is_none());
+        assert!(handle_slash_command("/issue", &session, CompactionConfig::default()).is_none());
+        assert!(
+            handle_slash_command("/ultraplan", &session, CompactionConfig::default()).is_none()
+        );
+        assert!(
+            handle_slash_command("/teleport foo", &session, CompactionConfig::default()).is_none()
+        );
+        assert!(
+            handle_slash_command("/debug-tool-call", &session, CompactionConfig::default())
+                .is_none()
+        );
+        assert!(
             handle_slash_command("/model claude", &session, CompactionConfig::default()).is_none()
         );
         assert!(handle_slash_command(
@@ -468,5 +884,221 @@ mod tests {
         assert!(
             handle_slash_command("/session list", &session, CompactionConfig::default()).is_none()
         );
+        assert!(
+            handle_slash_command("/plugins list", &session, CompactionConfig::default()).is_none()
+        );
+    }
+
+    #[test]
+    fn renders_plugins_report_with_name_version_and_status() {
+        let rendered = render_plugins_report(&[
+            PluginSummary {
+                metadata: PluginMetadata {
+                    id: "demo@external".to_string(),
+                    name: "demo".to_string(),
+                    version: "1.2.3".to_string(),
+                    description: "demo plugin".to_string(),
+                    kind: PluginKind::External,
+                    source: "demo".to_string(),
+                    default_enabled: false,
+                    root: None,
+                },
+                enabled: true,
+            },
+            PluginSummary {
+                metadata: PluginMetadata {
+                    id: "sample@external".to_string(),
+                    name: "sample".to_string(),
+                    version: "0.9.0".to_string(),
+                    description: "sample plugin".to_string(),
+                    kind: PluginKind::External,
+                    source: "sample".to_string(),
+                    default_enabled: false,
+                    root: None,
+                },
+                enabled: false,
+            },
+        ]);
+
+        assert!(rendered.contains("demo"));
+        assert!(rendered.contains("v1.2.3"));
+        assert!(rendered.contains("enabled"));
+        assert!(rendered.contains("sample"));
+        assert!(rendered.contains("v0.9.0"));
+        assert!(rendered.contains("disabled"));
+    }
+
+    #[test]
+    fn lists_agents_from_project_and_user_roots() {
+        let workspace = temp_dir("agents-workspace");
+        let project_agents = workspace.join(".codex").join("agents");
+        let user_home = temp_dir("agents-home");
+        let user_agents = user_home.join(".codex").join("agents");
+
+        write_agent(
+            &project_agents,
+            "planner",
+            "Project planner",
+            "gpt-5.4",
+            "medium",
+        );
+        write_agent(
+            &user_agents,
+            "planner",
+            "User planner",
+            "gpt-5.4-mini",
+            "high",
+        );
+        write_agent(
+            &user_agents,
+            "verifier",
+            "Verification agent",
+            "gpt-5.4-mini",
+            "high",
+        );
+
+        let roots = vec![
+            (DefinitionSource::ProjectCodex, project_agents),
+            (DefinitionSource::UserCodex, user_agents),
+        ];
+        let report = render_agents_report(
+            &load_agents_from_roots(&roots).expect("agent roots should load"),
+        );
+
+        assert!(report.contains("Agents"));
+        assert!(report.contains("2 active agents"));
+        assert!(report.contains("Project (.codex):"));
+        assert!(report.contains("planner · Project planner · gpt-5.4 · medium"));
+        assert!(report.contains("User (~/.codex):"));
+        assert!(report.contains("(shadowed by Project (.codex)) planner · User planner"));
+        assert!(report.contains("verifier · Verification agent · gpt-5.4-mini · high"));
+
+        let _ = fs::remove_dir_all(workspace);
+        let _ = fs::remove_dir_all(user_home);
+    }
+
+    #[test]
+    fn lists_skills_from_project_and_user_roots() {
+        let workspace = temp_dir("skills-workspace");
+        let project_skills = workspace.join(".codex").join("skills");
+        let user_home = temp_dir("skills-home");
+        let user_skills = user_home.join(".codex").join("skills");
+
+        write_skill(&project_skills, "plan", "Project planning guidance");
+        write_skill(&user_skills, "plan", "User planning guidance");
+        write_skill(&user_skills, "help", "Help guidance");
+
+        let roots = vec![
+            (DefinitionSource::ProjectCodex, project_skills),
+            (DefinitionSource::UserCodex, user_skills),
+        ];
+        let report = render_skills_report(
+            &load_skills_from_roots(&roots).expect("skill roots should load"),
+        );
+
+        assert!(report.contains("Skills"));
+        assert!(report.contains("2 available skills"));
+        assert!(report.contains("Project (.codex):"));
+        assert!(report.contains("plan · Project planning guidance"));
+        assert!(report.contains("User (~/.codex):"));
+        assert!(report.contains("(shadowed by Project (.codex)) plan · User planning guidance"));
+        assert!(report.contains("help · Help guidance"));
+
+        let _ = fs::remove_dir_all(workspace);
+        let _ = fs::remove_dir_all(user_home);
+    }
+
+    #[test]
+    fn installs_plugin_from_path_and_lists_it() {
+        let config_home = temp_dir("home");
+        let source_root = temp_dir("source");
+        write_external_plugin(&source_root, "demo", "1.0.0");
+
+        let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
+        let install = handle_plugins_slash_command(
+            Some("install"),
+            Some(source_root.to_str().expect("utf8 path")),
+            &mut manager,
+        )
+        .expect("install command should succeed");
+        assert!(install.reload_runtime);
+        assert!(install.message.contains("installed demo@external"));
+        assert!(install.message.contains("Name             demo"));
+        assert!(install.message.contains("Version          1.0.0"));
+        assert!(install.message.contains("Status           enabled"));
+
+        let list = handle_plugins_slash_command(Some("list"), None, &mut manager)
+            .expect("list command should succeed");
+        assert!(!list.reload_runtime);
+        assert!(list.message.contains("demo"));
+        assert!(list.message.contains("v1.0.0"));
+        assert!(list.message.contains("enabled"));
+
+        let _ = fs::remove_dir_all(config_home);
+        let _ = fs::remove_dir_all(source_root);
+    }
+
+    #[test]
+    fn enables_and_disables_plugin_by_name() {
+        let config_home = temp_dir("toggle-home");
+        let source_root = temp_dir("toggle-source");
+        write_external_plugin(&source_root, "demo", "1.0.0");
+
+        let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
+        handle_plugins_slash_command(
+            Some("install"),
+            Some(source_root.to_str().expect("utf8 path")),
+            &mut manager,
+        )
+        .expect("install command should succeed");
+
+        let disable = handle_plugins_slash_command(Some("disable"), Some("demo"), &mut manager)
+            .expect("disable command should succeed");
+        assert!(disable.reload_runtime);
+        assert!(disable.message.contains("disabled demo@external"));
+        assert!(disable.message.contains("Name             demo"));
+        assert!(disable.message.contains("Status           disabled"));
+
+        let list = handle_plugins_slash_command(Some("list"), None, &mut manager)
+            .expect("list command should succeed");
+        assert!(list.message.contains("demo"));
+        assert!(list.message.contains("disabled"));
+
+        let enable = handle_plugins_slash_command(Some("enable"), Some("demo"), &mut manager)
+            .expect("enable command should succeed");
+        assert!(enable.reload_runtime);
+        assert!(enable.message.contains("enabled demo@external"));
+        assert!(enable.message.contains("Name             demo"));
+        assert!(enable.message.contains("Status           enabled"));
+
+        let list = handle_plugins_slash_command(Some("list"), None, &mut manager)
+            .expect("list command should succeed");
+        assert!(list.message.contains("demo"));
+        assert!(list.message.contains("enabled"));
+
+        let _ = fs::remove_dir_all(config_home);
+        let _ = fs::remove_dir_all(source_root);
+    }
+
+    #[test]
+    fn lists_auto_installed_bundled_plugins_with_status() {
+        let config_home = temp_dir("bundled-home");
+        let bundled_root = temp_dir("bundled-root");
+        let bundled_plugin = bundled_root.join("starter");
+        write_bundled_plugin(&bundled_plugin, "starter", "0.1.0", false);
+
+        let mut config = PluginManagerConfig::new(&config_home);
+        config.bundled_root = Some(bundled_root.clone());
+        let mut manager = PluginManager::new(config);
+
+        let list = handle_plugins_slash_command(Some("list"), None, &mut manager)
+            .expect("list command should succeed");
+        assert!(!list.reload_runtime);
+        assert!(list.message.contains("starter"));
+        assert!(list.message.contains("v0.1.0"));
+        assert!(list.message.contains("disabled"));
+
+        let _ = fs::remove_dir_all(config_home);
+        let _ = fs::remove_dir_all(bundled_root);
     }
 }

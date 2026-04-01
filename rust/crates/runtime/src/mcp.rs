@@ -73,7 +73,7 @@ pub fn mcp_server_signature(config: &McpServerConfig) -> Option<String> {
             Some(format!("url:{}", unwrap_ccr_proxy_url(&config.url)))
         }
         McpServerConfig::Ws(config) => Some(format!("url:{}", unwrap_ccr_proxy_url(&config.url))),
-        McpServerConfig::ManagedProxy(config) => {
+        McpServerConfig::ClaudeAiProxy(config) => {
             Some(format!("url:{}", unwrap_ccr_proxy_url(&config.url)))
         }
         McpServerConfig::Sdk(_) => None,
@@ -110,7 +110,7 @@ pub fn scoped_mcp_config_hash(config: &ScopedMcpServerConfig) -> String {
             ws.headers_helper.as_deref().unwrap_or("")
         ),
         McpServerConfig::Sdk(sdk) => format!("sdk|{}", sdk.name),
-        McpServerConfig::ManagedProxy(proxy) => {
+        McpServerConfig::ClaudeAiProxy(proxy) => {
             format!("claudeai-proxy|{}|{}", proxy.url, proxy.id)
         }
     };
