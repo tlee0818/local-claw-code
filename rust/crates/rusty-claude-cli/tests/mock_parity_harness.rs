@@ -695,7 +695,10 @@ fn assert_auto_compact_triggered(_: &HarnessWorkspace, run: &ScenarioRun) {
     );
     // auto_compaction key must be present in JSON (may be null for below-threshold sessions)
     assert!(
-        run.response.as_object().expect("response object").contains_key("auto_compaction"),
+        run.response
+            .as_object()
+            .expect("response object")
+            .contains_key("auto_compaction"),
         "auto_compaction key must be present in JSON output"
     );
     // Verify input_tokens field reflects the large mock token counts
@@ -710,12 +713,10 @@ fn assert_auto_compact_triggered(_: &HarnessWorkspace, run: &ScenarioRun) {
 
 fn assert_token_cost_reporting(_: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["iterations"], Value::from(1));
-    assert!(
-        run.response["message"]
-            .as_str()
-            .expect("message text")
-            .contains("token cost reporting parity complete."),
-    );
+    assert!(run.response["message"]
+        .as_str()
+        .expect("message text")
+        .contains("token cost reporting parity complete."),);
     let usage = &run.response["usage"];
     assert!(
         usage["input_tokens"].as_u64().unwrap_or(0) > 0,

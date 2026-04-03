@@ -1243,7 +1243,10 @@ fn run_ask_user_question(input: AskUserQuestionInput) -> Result<String, String> 
 
     // Read user response from stdin
     let mut response = String::new();
-    stdin.lock().read_line(&mut response).map_err(|e| e.to_string())?;
+    stdin
+        .lock()
+        .read_line(&mut response)
+        .map_err(|e| e.to_string())?;
     let response = response.trim().to_string();
 
     // If options were provided, resolve the numeric choice
@@ -1630,7 +1633,11 @@ fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
             let status = response.status().as_u16();
             let body = response.text().unwrap_or_default();
             let truncated_body = if body.len() > 8192 {
-                format!("{}\n\n[response truncated — {} bytes total]", &body[..8192], body.len())
+                format!(
+                    "{}\n\n[response truncated — {} bytes total]",
+                    &body[..8192],
+                    body.len()
+                )
             } else {
                 body
             };
@@ -3380,7 +3387,10 @@ struct SubagentToolExecutor {
 
 impl SubagentToolExecutor {
     fn new(allowed_tools: BTreeSet<String>) -> Self {
-        Self { allowed_tools, enforcer: None }
+        Self {
+            allowed_tools,
+            enforcer: None,
+        }
     }
 
     fn with_enforcer(mut self, enforcer: PermissionEnforcer) -> Self {
@@ -3398,7 +3408,8 @@ impl ToolExecutor for SubagentToolExecutor {
         }
         let value = serde_json::from_str(input)
             .map_err(|error| ToolError::new(format!("invalid tool input JSON: {error}")))?;
-        execute_tool_with_enforcer(self.enforcer.as_ref(), tool_name, &value).map_err(ToolError::new)
+        execute_tool_with_enforcer(self.enforcer.as_ref(), tool_name, &value)
+            .map_err(ToolError::new)
     }
 }
 
@@ -4809,10 +4820,11 @@ mod tests {
     }
 
     fn permission_policy_for_mode(mode: PermissionMode) -> PermissionPolicy {
-        mvp_tool_specs().into_iter().fold(
-            PermissionPolicy::new(mode),
-            |policy, spec| policy.with_tool_requirement(spec.name, spec.required_permission),
-        )
+        mvp_tool_specs()
+            .into_iter()
+            .fold(PermissionPolicy::new(mode), |policy, spec| {
+                policy.with_tool_requirement(spec.name, spec.required_permission)
+            })
     }
 
     #[test]
@@ -5024,7 +5036,9 @@ mod tests {
             .expect_err("subagent write tool should be denied before dispatch");
 
         // then
-        assert!(error.to_string().contains("requires workspace-write permission"));
+        assert!(error
+            .to_string()
+            .contains("requires workspace-write permission"));
     }
 
     #[test]
