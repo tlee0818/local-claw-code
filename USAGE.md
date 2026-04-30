@@ -232,9 +232,29 @@ export ANTHROPIC_AUTH_TOKEN="anthropic-oauth-or-proxy-bearer-token"
 
 ## Local Models
 
-`claw` can talk to local servers and provider gateways through either Anthropic-compatible or OpenAI-compatible endpoints. Use `ANTHROPIC_BASE_URL` with `ANTHROPIC_AUTH_TOKEN` for Anthropic-compatible services, or `OPENAI_BASE_URL` with `OPENAI_API_KEY` for OpenAI-compatible services.
+`claw` can talk to local servers and provider gateways through three paths:
 
-### Anthropic-compatible endpoint
+- **Local provider** (`LOCAL_LLM_BASE_URL`) — Anthropic wire format, no auth required. Designed for self-hosted servers (e.g. llama.cpp, vLLM serving the Anthropic API shape) where you control the endpoint and don't want to set up credentials.
+- **Anthropic-compatible** (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`) — for proxies and gateways that speak the Anthropic format and require a token.
+- **OpenAI-compatible** (`OPENAI_BASE_URL` + `OPENAI_API_KEY`) — for Ollama, LM Studio, vLLM, OpenRouter, and any service that speaks the OpenAI Chat Completions format.
+
+### Local provider (no auth, Anthropic wire format)
+
+Set `LOCAL_LLM_BASE_URL` to your server's base URL. Any model name that does not match a known prefix (`claude-*`, `grok-*`, `openai/*`, `gpt-*`, `qwen-*`, `kimi-*`) will be routed to this provider automatically — no API key needed.
+
+```bash
+export LOCAL_LLM_BASE_URL="http://192.168.1.100:8080"
+
+cd rust
+./target/debug/claw --model "llama3.2" prompt "reply with the word ready"
+./target/debug/claw --model "my-fine-tune" prompt "reply with the word ready"
+```
+
+The request is sent to `{LOCAL_LLM_BASE_URL}/v1/messages` using the standard Anthropic JSON body. If your server is on a different machine, replace `192.168.1.100:8080` with its IP and port.
+
+> **Routing priority:** Model-name prefixes always win. Setting `LOCAL_LLM_BASE_URL` does **not** redirect `claude-*` or `grok-*` models — those still go to Anthropic and xAI respectively. Only unknown model names route to Local.
+
+### Anthropic-compatible endpoint (with auth token)
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
@@ -293,7 +313,7 @@ Reasoning variants (`qwen-qwq-*`, `qwq-*`, `*-thinking`) automatically strip `te
 
 ## Supported Providers & Models
 
-`claw` has three built-in provider backends. The provider is selected automatically based on the model name, falling back to whichever credential is present in the environment.
+`claw` has four built-in provider backends. The provider is selected automatically based on the model name, falling back to whichever credential is present in the environment.
 
 ### Provider matrix
 
@@ -303,10 +323,13 @@ Reasoning variants (`qwen-qwq-*`, `qwq-*`, `*-thinking`) automatically strip `te
 | **xAI** | OpenAI-compatible | `XAI_API_KEY` | `XAI_BASE_URL` | `https://api.x.ai/v1` |
 | **OpenAI-compatible** | OpenAI Chat Completions | `OPENAI_API_KEY` | `OPENAI_BASE_URL` | `https://api.openai.com/v1` |
 | **DashScope** (Alibaba) | OpenAI-compatible | `DASHSCOPE_API_KEY` | `DASHSCOPE_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| **Local** (self-hosted) | Anthropic Messages API | _(none)_ | `LOCAL_LLM_BASE_URL` | _(required)_ |
 
 The OpenAI-compatible backend also serves as the gateway for **OpenRouter**, **Ollama**, and any other service that speaks the OpenAI `/v1/chat/completions` wire format — just point `OPENAI_BASE_URL` at the service.
 
-**Model-name prefix routing:** If a model name starts with `openai/`, `gpt-`, `qwen/`, or `qwen-`, the provider is selected by the prefix regardless of which env vars are set. This prevents accidental misrouting to Anthropic when multiple credentials exist in the environment.
+The **Local** backend targets servers that serve the Anthropic `/v1/messages` format without requiring authentication — useful for self-hosted inference servers on a local network.
+
+**Model-name prefix routing:** If a model name starts with `claude-`, `grok-`, `openai/`, `gpt-`, `qwen/`, or `qwen-`, the provider is selected by the prefix regardless of which env vars are set. This prevents accidental misrouting when multiple credentials exist in the environment.
 
 ### Tested models and aliases
 
@@ -343,8 +366,10 @@ Local project settings override user-level settings. Aliases resolve through the
 
 1. If the resolved model name starts with `claude` → Anthropic.
 2. If it starts with `grok` → xAI.
-3. Otherwise, `claw` checks which credential is set: `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` first, then `OPENAI_API_KEY`, then `XAI_API_KEY`.
-4. If nothing matches, it defaults to Anthropic.
+3. If it starts with `openai/`, `gpt-`, `qwen/`, `qwen-`, `kimi/`, or `kimi-` → OpenAI-compatible (with the appropriate backend).
+4. If `LOCAL_LLM_BASE_URL` is set and the model name has no recognized prefix → **Local**.
+5. Otherwise, `claw` checks which credential is set: `OPENAI_BASE_URL`+`OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`, then `OPENAI_API_KEY`, then `XAI_API_KEY`.
+6. If nothing matches, it defaults to Anthropic.
 
 ## FAQ
 

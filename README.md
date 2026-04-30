@@ -176,7 +176,7 @@ claw --help
 - **Debug vs. release** — If the build is slow, you're in debug mode (default). Add `--release` to `cargo build` for faster runtime, but the build itself will take 5–10 minutes.
 
 > [!NOTE]
-> **Auth:** claw requires an **API key** (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) — Claude subscription login is not a supported auth path.
+> **Auth:** claw requires an **API key** (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) — Claude subscription login is not a supported auth path. The **Local** provider is the exception: set `LOCAL_LLM_BASE_URL` to a self-hosted server and no API key is needed.
 
 Run the workspace test suite after verifying the binary works:
 
