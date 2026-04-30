@@ -8,6 +8,7 @@ use crate::error::ApiError;
 use crate::types::{MessageRequest, MessageResponse};
 
 pub mod anthropic;
+pub mod local;
 pub mod openai_compat;
 
 #[allow(dead_code)]
@@ -33,6 +34,7 @@ pub enum ProviderKind {
     Anthropic,
     Xai,
     OpenAi,
+    Local,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,6 +225,13 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
 pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if let Some(metadata) = metadata_for_model(model) {
         return metadata.provider;
+    }
+    // When LOCAL_LLM_BASE_URL is set and the model name has no recognized
+    // prefix (e.g. "llama3.2", "my-model"), route to the Local provider.
+    // This check runs before the auth-sniffer fallbacks so that local
+    // servers take priority over any ambient API keys.
+    if std::env::var_os(local::LOCAL_LLM_BASE_URL_ENV).is_some() {
+        return ProviderKind::Local;
     }
     // When OPENAI_BASE_URL is set, the user explicitly configured an
     // OpenAI-compatible endpoint. Prefer it over the Anthropic fallback
