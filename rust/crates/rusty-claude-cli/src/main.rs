@@ -8404,7 +8404,9 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
         _ => summarize_tool_payload(input),
     };
 
-    let border = "─".repeat(name.len() + 8);
+    // Top line inner width: "─ {name} ─" = name.len() + 4.
+    // Bottom must match: "╰" + border + "╯" → border = name.len() + 4.
+    let border = "─".repeat(name.len() + 4);
     format!(
         "\x1b[38;5;245m╭─ \x1b[1;36m{name}\x1b[0;38;5;245m ─╮\x1b[0m\n\x1b[38;5;245m│\x1b[0m {detail}\n\x1b[38;5;245m╰{border}╯\x1b[0m"
     )
@@ -8517,9 +8519,16 @@ fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> String {
     }
 
     if let Some(stdout) = parsed.get("stdout").and_then(|value| value.as_str()) {
-        if !stdout.trim().is_empty() {
+        let trimmed = stdout.trim();
+        if !trimmed.is_empty() {
+            // Auto-pretty-print JSON output (e.g. `cat package.json`, `jq` calls).
+            let display = if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| trimmed.to_string())
+            } else {
+                trimmed.to_string()
+            };
             lines.push(truncate_output_for_display(
-                stdout,
+                &display,
                 TOOL_OUTPUT_DISPLAY_MAX_LINES,
                 TOOL_OUTPUT_DISPLAY_MAX_CHARS,
             ));
