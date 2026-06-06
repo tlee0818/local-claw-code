@@ -61,14 +61,26 @@ git clone https://github.com/ultraworkers/claw-code
 cd claw-code/rust
 cargo build --workspace
 
-# 2. Set your API key (Anthropic API key — not a Claude subscription)
+# 2. Set your API key — pick one provider:
+
+# Anthropic (default model: claude-opus-4-6)
 export ANTHROPIC_API_KEY="sk-ant-..."
+
+# OpenRouter — 200+ models via one endpoint (default: deepseek/deepseek-v4-flash)
+export OPENROUTER_API_KEY="sk-or-..."
+
+# Together AI — serverless GPU inference for open models
+export TOGETHER_API_KEY="..."
 
 # 3. Verify everything is wired correctly
 ./target/debug/claw doctor
 
 # 4. Run a prompt
 ./target/debug/claw prompt "say hello"
+
+# 4b. Pick any model explicitly (OpenRouter and Together use provider/ prefix)
+./target/debug/claw --model openrouter/meta-llama/llama-3.3-70b-instruct prompt "say hello"
+./target/debug/claw --model together/meta-llama/Llama-3-70b-chat-hf prompt "say hello"
 ```
 
 > [!NOTE]
@@ -176,7 +188,18 @@ claw --help
 - **Debug vs. release** — If the build is slow, you're in debug mode (default). Add `--release` to `cargo build` for faster runtime, but the build itself will take 5–10 minutes.
 
 > [!NOTE]
-> **Auth:** claw requires an **API key** (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) — Claude subscription login is not a supported auth path. The **Local** provider is the exception: set `LOCAL_LLM_BASE_URL` to a self-hosted server and no API key is needed.
+> **Auth:** claw requires an **API key** — Claude subscription login is not a supported auth path. Supported providers and their env vars:
+> | Provider | Env var | Default model |
+> |----------|---------|---------------|
+> | Anthropic | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
+> | OpenRouter | `OPENROUTER_API_KEY` | `openrouter/deepseek/deepseek-v4-flash` |
+> | Together AI | `TOGETHER_API_KEY` | _(specify with `--model together/<model>`)_ |
+> | OpenAI | `OPENAI_API_KEY` | _(use `openai/<model>` or `gpt-*` prefix)_ |
+> | xAI | `XAI_API_KEY` | _(use `grok` alias)_ |
+> | DashScope | `DASHSCOPE_API_KEY` | _(use `qwen/` prefix)_ |
+> | Local | `LOCAL_LLM_BASE_URL` | _(no API key needed)_ |
+>
+> When multiple keys are set, Anthropic takes priority. Override with `--model`.
 
 Run the workspace test suite after verifying the binary works:
 
