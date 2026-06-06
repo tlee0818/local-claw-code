@@ -1485,7 +1485,16 @@ fn validate_model_syntax(model: &str) -> Result<(), String> {
         ));
     }
     // Check provider/model format: provider_id/model_id
+    // Routing prefixes like openrouter/ and together/ carry a nested provider
+    // namespace (e.g. openrouter/meta-llama/llama-3.3-70b-instruct), so allow
+    // more than two slash-separated segments when the first is a known prefix.
     let parts: Vec<&str> = trimmed.split('/').collect();
+    let is_nested_routing = parts.len() >= 2
+        && matches!(parts[0], "openrouter" | "together")
+        && parts[1..].iter().all(|p| !p.is_empty());
+    if is_nested_routing {
+        return Ok(());
+    }
     if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
         // #154: hint if the model looks like it belongs to a different provider
         let mut err_msg = format!(
