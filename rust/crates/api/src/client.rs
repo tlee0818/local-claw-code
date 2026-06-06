@@ -12,6 +12,8 @@ pub enum ProviderClient {
     Anthropic(AnthropicClient),
     Xai(OpenAiCompatClient),
     OpenAi(OpenAiCompatClient),
+    OpenRouter(OpenAiCompatClient),
+    Together(OpenAiCompatClient),
     Local(LocalClient),
 }
 
@@ -34,32 +36,22 @@ impl ProviderClient {
                 OpenAiCompatConfig::xai(),
             )?)),
             ProviderKind::OpenAi => {
-                // DashScope, OpenRouter, and Together AI all return ProviderKind::OpenAi
-                // because they speak the OpenAI wire format, but each needs its own config
-                // (different auth env var and base URL). Check metadata first (prefix routing),
-                // then fall back to env-var presence for keyless-prefix usage.
+                // DashScope also uses ProviderKind::OpenAi (OpenAI wire format).
+                // Check metadata to select the right config (auth env + base URL).
                 let config = match providers::metadata_for_model(&resolved_model) {
                     Some(meta) if meta.auth_env == "DASHSCOPE_API_KEY" => {
                         OpenAiCompatConfig::dashscope()
                     }
-                    Some(meta) if meta.auth_env == "OPENROUTER_API_KEY" => {
-                        OpenAiCompatConfig::openrouter()
-                    }
-                    Some(meta) if meta.auth_env == "TOGETHER_API_KEY" => {
-                        OpenAiCompatConfig::together()
-                    }
-                    _ => {
-                        if openai_compat::has_api_key("OPENROUTER_API_KEY") {
-                            OpenAiCompatConfig::openrouter()
-                        } else if openai_compat::has_api_key("TOGETHER_API_KEY") {
-                            OpenAiCompatConfig::together()
-                        } else {
-                            OpenAiCompatConfig::openai()
-                        }
-                    }
+                    _ => OpenAiCompatConfig::openai(),
                 };
                 Ok(Self::OpenAi(OpenAiCompatClient::from_env(config)?))
             }
+            ProviderKind::OpenRouter => Ok(Self::OpenRouter(OpenAiCompatClient::from_env(
+                OpenAiCompatConfig::openrouter(),
+            )?)),
+            ProviderKind::Together => Ok(Self::Together(OpenAiCompatClient::from_env(
+                OpenAiCompatConfig::together(),
+            )?)),
             ProviderKind::Local => Ok(Self::Local(LocalClient::from_env()?)),
         }
     }
@@ -70,6 +62,8 @@ impl ProviderClient {
             Self::Anthropic(_) => ProviderKind::Anthropic,
             Self::Xai(_) => ProviderKind::Xai,
             Self::OpenAi(_) => ProviderKind::OpenAi,
+            Self::OpenRouter(_) => ProviderKind::OpenRouter,
+            Self::Together(_) => ProviderKind::Together,
             Self::Local(_) => ProviderKind::Local,
         }
     }
@@ -86,7 +80,11 @@ impl ProviderClient {
     pub fn prompt_cache_stats(&self) -> Option<PromptCacheStats> {
         match self {
             Self::Anthropic(client) => client.prompt_cache_stats(),
-            Self::Xai(_) | Self::OpenAi(_) | Self::Local(_) => None,
+            Self::Xai(_)
+            | Self::OpenAi(_)
+            | Self::OpenRouter(_)
+            | Self::Together(_)
+            | Self::Local(_) => None,
         }
     }
 
@@ -94,7 +92,11 @@ impl ProviderClient {
     pub fn take_last_prompt_cache_record(&self) -> Option<PromptCacheRecord> {
         match self {
             Self::Anthropic(client) => client.take_last_prompt_cache_record(),
-            Self::Xai(_) | Self::OpenAi(_) | Self::Local(_) => None,
+            Self::Xai(_)
+            | Self::OpenAi(_)
+            | Self::OpenRouter(_)
+            | Self::Together(_)
+            | Self::Local(_) => None,
         }
     }
 
@@ -104,7 +106,10 @@ impl ProviderClient {
     ) -> Result<MessageResponse, ApiError> {
         match self {
             Self::Anthropic(client) => client.send_message(request).await,
-            Self::Xai(client) | Self::OpenAi(client) => client.send_message(request).await,
+            Self::Xai(client)
+            | Self::OpenAi(client)
+            | Self::OpenRouter(client)
+            | Self::Together(client) => client.send_message(request).await,
             Self::Local(client) => client.send_message(request).await,
         }
     }
@@ -118,7 +123,10 @@ impl ProviderClient {
                 .stream_message(request)
                 .await
                 .map(MessageStream::Anthropic),
-            Self::Xai(client) | Self::OpenAi(client) => client
+            Self::Xai(client)
+            | Self::OpenAi(client)
+            | Self::OpenRouter(client)
+            | Self::Together(client) => client
                 .stream_message(request)
                 .await
                 .map(MessageStream::OpenAiCompat),

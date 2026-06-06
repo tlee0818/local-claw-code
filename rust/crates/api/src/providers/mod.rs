@@ -34,6 +34,8 @@ pub enum ProviderKind {
     Anthropic,
     Xai,
     OpenAi,
+    OpenRouter,
+    Together,
     Local,
 }
 
@@ -159,7 +161,7 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "kimi" => "kimi-k2.5",
                     _ => trimmed,
                 },
-                ProviderKind::Local => trimmed,
+                ProviderKind::OpenRouter | ProviderKind::Together | ProviderKind::Local => trimmed,
             })
         })
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
@@ -223,7 +225,7 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
     // this backend regardless of which other API keys are present.
     if canonical.starts_with("openrouter/") {
         return Some(ProviderMetadata {
-            provider: ProviderKind::OpenAi,
+            provider: ProviderKind::OpenRouter,
             auth_env: "OPENROUTER_API_KEY",
             base_url_env: "OPENROUTER_BASE_URL",
             default_base_url: openai_compat::DEFAULT_OPENROUTER_BASE_URL,
@@ -233,7 +235,7 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
     // this backend regardless of which other API keys are present.
     if canonical.starts_with("together/") {
         return Some(ProviderMetadata {
-            provider: ProviderKind::OpenAi,
+            provider: ProviderKind::Together,
             auth_env: "TOGETHER_API_KEY",
             base_url_env: "TOGETHER_BASE_URL",
             default_base_url: openai_compat::DEFAULT_TOGETHER_BASE_URL,
@@ -273,10 +275,10 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
         return ProviderKind::Xai;
     }
     if openai_compat::has_api_key("OPENROUTER_API_KEY") {
-        return ProviderKind::OpenAi;
+        return ProviderKind::OpenRouter;
     }
     if openai_compat::has_api_key("TOGETHER_API_KEY") {
-        return ProviderKind::OpenAi;
+        return ProviderKind::Together;
     }
     // Last resort: if OPENAI_BASE_URL is set without OPENAI_API_KEY (some
     // local providers like Ollama don't require auth), still route there.

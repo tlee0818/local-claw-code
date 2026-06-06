@@ -1628,18 +1628,14 @@ fn provider_label(kind: ProviderKind) -> &'static str {
         ProviderKind::Anthropic => "anthropic",
         ProviderKind::Xai => "xai",
         ProviderKind::OpenAi => "openai",
+        ProviderKind::OpenRouter => "openrouter",
+        ProviderKind::Together => "together",
         ProviderKind::Local => "local",
     }
 }
 
 fn format_connected_line(model: &str) -> String {
-    let provider = if model.starts_with("openrouter/") {
-        "openrouter"
-    } else if model.starts_with("together/") {
-        "together"
-    } else {
-        provider_label(detect_provider_kind(model))
-    };
+    let provider = provider_label(detect_provider_kind(model));
     format!("Connected: {model} via {provider}")
 }
 
@@ -7730,7 +7726,11 @@ impl AnthropicRuntimeClient {
                     .with_prompt_cache(PromptCache::new(session_id));
                 ApiProviderClient::Anthropic(inner)
             }
-            ProviderKind::Xai | ProviderKind::OpenAi | ProviderKind::Local => {
+            ProviderKind::Xai
+            | ProviderKind::OpenAi
+            | ProviderKind::OpenRouter
+            | ProviderKind::Together
+            | ProviderKind::Local => {
                 // The api crate's `ProviderClient::from_model_with_anthropic_auth`
                 // with `None` for the anthropic auth routes via
                 // `detect_provider_kind` and builds an
