@@ -1633,7 +1633,13 @@ fn provider_label(kind: ProviderKind) -> &'static str {
 }
 
 fn format_connected_line(model: &str) -> String {
-    let provider = provider_label(detect_provider_kind(model));
+    let provider = if model.starts_with("openrouter/") {
+        "openrouter"
+    } else if model.starts_with("together/") {
+        "together"
+    } else {
+        provider_label(detect_provider_kind(model))
+    };
     format!("Connected: {model} via {provider}")
 }
 
