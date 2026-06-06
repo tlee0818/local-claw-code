@@ -57,6 +57,7 @@ use tools::{
 };
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
+const DEFAULT_OPENROUTER_MODEL: &str = "openrouter/deepseek/deepseek-v4-flash";
 
 /// #148: Model provenance for `claw status` JSON/text output. Records where
 /// the resolved model string came from so claws don't have to re-read argv
@@ -99,7 +100,7 @@ struct ModelProvenance {
 impl ModelProvenance {
     fn default_fallback() -> Self {
         Self {
-            resolved: DEFAULT_MODEL.to_string(),
+            resolved: default_model_for_env().to_string(),
             raw: None,
             source: ModelSource::Default,
         }
@@ -145,6 +146,23 @@ impl ModelProvenance {
         }
         Self::default_fallback()
     }
+}
+
+/// Returns the appropriate compiled-in default model based on which provider
+/// credentials are present in the environment. Mirrors the priority order of
+/// `detect_provider_kind`: Anthropic creds win over OpenRouter so users with
+/// both keys keep the Anthropic default.
+fn default_model_for_env() -> &'static str {
+    let anthropic_key = env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+    let anthropic_token = env::var("ANTHROPIC_AUTH_TOKEN").unwrap_or_default();
+    if !anthropic_key.is_empty() || !anthropic_token.is_empty() {
+        return DEFAULT_MODEL;
+    }
+    let openrouter_key = env::var("OPENROUTER_API_KEY").unwrap_or_default();
+    if !openrouter_key.is_empty() {
+        return DEFAULT_OPENROUTER_MODEL;
+    }
+    DEFAULT_MODEL
 }
 
 fn max_tokens_for_model(model: &str) -> u32 {
@@ -1593,7 +1611,7 @@ fn resolve_repl_model(cli_model: String) -> String {
     if let Some(config_model) = config_model_for_current_dir() {
         return resolve_model_alias_with_config(&config_model);
     }
-    cli_model
+    default_model_for_env().to_string()
 }
 
 fn provider_label(kind: ProviderKind) -> &'static str {
@@ -1601,6 +1619,7 @@ fn provider_label(kind: ProviderKind) -> &'static str {
         ProviderKind::Anthropic => "anthropic",
         ProviderKind::Xai => "xai",
         ProviderKind::OpenAi => "openai",
+        ProviderKind::Local => "local",
     }
 }
 
@@ -7696,16 +7715,16 @@ impl AnthropicRuntimeClient {
                     .with_prompt_cache(PromptCache::new(session_id));
                 ApiProviderClient::Anthropic(inner)
             }
-            ProviderKind::Xai | ProviderKind::OpenAi => {
+            ProviderKind::Xai | ProviderKind::OpenAi | ProviderKind::Local => {
                 // The api crate's `ProviderClient::from_model_with_anthropic_auth`
                 // with `None` for the anthropic auth routes via
                 // `detect_provider_kind` and builds an
                 // `OpenAiCompatClient::from_env` with the matching
-                // `OpenAiCompatConfig` (openai / xai / dashscope).
+                // `OpenAiCompatConfig` (openai / xai / dashscope / local).
                 // That reads the correct API-key env var and BASE_URL
                 // override internally, so this one call covers OpenAI,
-                // OpenRouter, xAI, DashScope, Ollama, and any other
-                // OpenAI-compat endpoint users configure via
+                // OpenRouter, xAI, DashScope, Ollama, local servers, and
+                // any other OpenAI-compat endpoint users configure via
                 // `OPENAI_BASE_URL` / `XAI_BASE_URL` / `DASHSCOPE_BASE_URL`.
                 ApiProviderClient::from_model_with_anthropic_auth(&resolved_model, None)?
             }

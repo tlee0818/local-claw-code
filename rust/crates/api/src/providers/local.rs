@@ -94,6 +94,7 @@ impl LocalClient {
         request: &MessageRequest,
     ) -> Result<reqwest::Response, ApiError> {
         let mut attempts = 0;
+        #[allow(unused_assignments)]
         let mut last_error: Option<ApiError> = None;
 
         loop {
