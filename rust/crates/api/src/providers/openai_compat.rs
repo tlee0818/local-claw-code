@@ -19,6 +19,8 @@ use super::{preflight_message_request, Provider, ProviderFuture};
 pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_DASHSCOPE_BASE_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+pub const DEFAULT_TOGETHER_BASE_URL: &str = "https://api.together.xyz/v1";
 const REQUEST_ID_HEADER: &str = "request-id";
 const ALT_REQUEST_ID_HEADER: &str = "x-request-id";
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
@@ -41,11 +43,15 @@ pub struct OpenAiCompatConfig {
 const XAI_ENV_VARS: &[&str] = &["XAI_API_KEY"];
 const OPENAI_ENV_VARS: &[&str] = &["OPENAI_API_KEY"];
 const DASHSCOPE_ENV_VARS: &[&str] = &["DASHSCOPE_API_KEY"];
+const OPENROUTER_ENV_VARS: &[&str] = &["OPENROUTER_API_KEY"];
+const TOGETHER_ENV_VARS: &[&str] = &["TOGETHER_API_KEY"];
 
 // Provider-specific request body size limits in bytes
 const XAI_MAX_REQUEST_BODY_BYTES: usize = 52_428_800; // 50MB
 const OPENAI_MAX_REQUEST_BODY_BYTES: usize = 104_857_600; // 100MB
 const DASHSCOPE_MAX_REQUEST_BODY_BYTES: usize = 6_291_456; // 6MB (observed limit in dogfood)
+const OPENROUTER_MAX_REQUEST_BODY_BYTES: usize = 104_857_600; // 100MB
+const TOGETHER_MAX_REQUEST_BODY_BYTES: usize = 104_857_600; // 100MB
 
 impl OpenAiCompatConfig {
     #[must_use]
@@ -85,12 +91,44 @@ impl OpenAiCompatConfig {
         }
     }
 
+    /// OpenRouter — unified gateway to hundreds of models via a single
+    /// OpenAI-compatible endpoint. Use `openrouter/<model>` as the model
+    /// string (e.g. `openrouter/meta-llama/llama-3.3-70b-instruct`).
+    /// Requires `OPENROUTER_API_KEY`.
+    #[must_use]
+    pub const fn openrouter() -> Self {
+        Self {
+            provider_name: "OpenRouter",
+            api_key_env: "OPENROUTER_API_KEY",
+            base_url_env: "OPENROUTER_BASE_URL",
+            default_base_url: DEFAULT_OPENROUTER_BASE_URL,
+            max_request_body_bytes: OPENROUTER_MAX_REQUEST_BODY_BYTES,
+        }
+    }
+
+    /// Together AI — serverless GPU inference for open models.
+    /// Use `together/<model>` as the model string
+    /// (e.g. `together/meta-llama/Llama-3-70b-chat-hf`).
+    /// Requires `TOGETHER_API_KEY`.
+    #[must_use]
+    pub const fn together() -> Self {
+        Self {
+            provider_name: "Together",
+            api_key_env: "TOGETHER_API_KEY",
+            base_url_env: "TOGETHER_BASE_URL",
+            default_base_url: DEFAULT_TOGETHER_BASE_URL,
+            max_request_body_bytes: TOGETHER_MAX_REQUEST_BODY_BYTES,
+        }
+    }
+
     #[must_use]
     pub fn credential_env_vars(self) -> &'static [&'static str] {
         match self.provider_name {
             "xAI" => XAI_ENV_VARS,
             "OpenAI" => OPENAI_ENV_VARS,
             "DashScope" => DASHSCOPE_ENV_VARS,
+            "OpenRouter" => OPENROUTER_ENV_VARS,
+            "Together" => TOGETHER_ENV_VARS,
             _ => &[],
         }
     }
@@ -801,7 +839,10 @@ fn strip_routing_prefix(model: &str) -> &str {
         let prefix = &model[..pos];
         // Only strip if the prefix before "/" is a known routing prefix,
         // not if "/" appears in the middle of the model name for other reasons.
-        if matches!(prefix, "openai" | "xai" | "grok" | "qwen" | "kimi") {
+        if matches!(
+            prefix,
+            "openai" | "xai" | "grok" | "qwen" | "kimi" | "openrouter" | "together"
+        ) {
             &model[pos + 1..]
         } else {
             model

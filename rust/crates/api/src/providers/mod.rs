@@ -218,6 +218,26 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             default_base_url: openai_compat::DEFAULT_DASHSCOPE_BASE_URL,
         });
     }
+    // OpenRouter — unified gateway to many models. Prefix `openrouter/` selects
+    // this backend regardless of which other API keys are present.
+    if canonical.starts_with("openrouter/") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "OPENROUTER_API_KEY",
+            base_url_env: "OPENROUTER_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OPENROUTER_BASE_URL,
+        });
+    }
+    // Together AI — serverless GPU inference. Prefix `together/` selects
+    // this backend regardless of which other API keys are present.
+    if canonical.starts_with("together/") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "TOGETHER_API_KEY",
+            base_url_env: "TOGETHER_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_TOGETHER_BASE_URL,
+        });
+    }
     None
 }
 
@@ -250,6 +270,12 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     }
     if openai_compat::has_api_key("XAI_API_KEY") {
         return ProviderKind::Xai;
+    }
+    if openai_compat::has_api_key("OPENROUTER_API_KEY") {
+        return ProviderKind::OpenAi;
+    }
+    if openai_compat::has_api_key("TOGETHER_API_KEY") {
+        return ProviderKind::OpenAi;
     }
     // Last resort: if OPENAI_BASE_URL is set without OPENAI_API_KEY (some
     // local providers like Ollama don't require auth), still route there.
@@ -361,6 +387,16 @@ const FOREIGN_PROVIDER_ENV_VARS: &[(&str, &str, &str)] = &[
         "DASHSCOPE_API_KEY",
         "Alibaba DashScope",
         "prefix your model name with `qwen/` or `qwen-` (e.g. `--model qwen-plus`) so prefix routing selects the DashScope backend",
+    ),
+    (
+        "OPENROUTER_API_KEY",
+        "OpenRouter",
+        "prefix your model name with `openrouter/` (e.g. `--model openrouter/meta-llama/llama-3.3-70b-instruct`) so prefix routing selects the OpenRouter backend",
+    ),
+    (
+        "TOGETHER_API_KEY",
+        "Together AI",
+        "prefix your model name with `together/` (e.g. `--model together/meta-llama/Llama-3-70b-chat-hf`) so prefix routing selects the Together AI backend",
     ),
 ];
 

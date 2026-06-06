@@ -34,14 +34,29 @@ impl ProviderClient {
                 OpenAiCompatConfig::xai(),
             )?)),
             ProviderKind::OpenAi => {
-                // DashScope models (qwen-*) also return ProviderKind::OpenAi because they
-                // speak the OpenAI wire format, but they need the DashScope config which
-                // reads DASHSCOPE_API_KEY and points at dashscope.aliyuncs.com.
+                // DashScope, OpenRouter, and Together AI all return ProviderKind::OpenAi
+                // because they speak the OpenAI wire format, but each needs its own config
+                // (different auth env var and base URL). Check metadata first (prefix routing),
+                // then fall back to env-var presence for keyless-prefix usage.
                 let config = match providers::metadata_for_model(&resolved_model) {
                     Some(meta) if meta.auth_env == "DASHSCOPE_API_KEY" => {
                         OpenAiCompatConfig::dashscope()
                     }
-                    _ => OpenAiCompatConfig::openai(),
+                    Some(meta) if meta.auth_env == "OPENROUTER_API_KEY" => {
+                        OpenAiCompatConfig::openrouter()
+                    }
+                    Some(meta) if meta.auth_env == "TOGETHER_API_KEY" => {
+                        OpenAiCompatConfig::together()
+                    }
+                    _ => {
+                        if openai_compat::has_api_key("OPENROUTER_API_KEY") {
+                            OpenAiCompatConfig::openrouter()
+                        } else if openai_compat::has_api_key("TOGETHER_API_KEY") {
+                            OpenAiCompatConfig::together()
+                        } else {
+                            OpenAiCompatConfig::openai()
+                        }
+                    }
                 };
                 Ok(Self::OpenAi(OpenAiCompatClient::from_env(config)?))
             }
